@@ -1,0 +1,10 @@
+autogen-agentchat==0.4.9.3
+autogen-ext==0.4.9.3
+autogen-core==0.4.9.3
+openai==1.69.0
+crewai==0.95.0
+fastapi==0.115.12
+uvicorn==0.34.0
+sqlalchemy==2.0.40
+python-dotenv==1.1.0
+
