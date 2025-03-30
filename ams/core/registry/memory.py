@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from .base import AgentRegistry
-from .models import AgentMetadata, AgentStatus, AgentCapability
+from .models import AgentMetadata, AgentStatus
 
 logger = logging.getLogger(__name__)
 

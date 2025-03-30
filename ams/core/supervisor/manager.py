@@ -261,4 +261,138 @@ class SupervisorManager(SupervisorAgent):
         self.active_sessions[session_id]["status"] = "terminated"
         
         logger.info(f"Terminated collaboration session {session_id}")
-        return True 
+        return True
+        
+    async def determine_agent_execution_order(self, agents: List[AgentMetadata]) -> List[AgentMetadata]:
+        """
+        Determine the optimal execution order for agents in a collaboration.
+        
+        This method uses agent metadata, roles, and dependencies to create
+        an optimal execution sequence for a multi-agent collaboration task.
+        
+        Args:
+            agents: List of agent metadata objects
+            
+        Returns:
+            Ordered list of agents optimized for collaboration efficiency
+        """
+        logger.info(f"Determining optimal execution order for {len(agents)} agents")
+        
+        # Define the execution priority for different agent roles
+        role_priorities = {
+            "research": 1,
+            "strategist": 2, 
+            "writer": 3,
+            "content": 3,  # Same priority as writer
+            "evaluator": 4,
+            "reviewer": 4   # Same priority as evaluator
+        }
+        
+        # Default priority for agents that don't match any category
+        default_priority = 5
+        
+        # Build a dependency graph
+        dependencies = {}  # agent_id -> list of agent_ids it depends on
+        agent_map = {agent.id: agent for agent in agents}
+        
+        # First pass: collect explicit dependencies from agent configs
+        for agent in agents:
+            if agent.config and "depends_on" in agent.config:
+                depends_on = agent.config["depends_on"]
+                if isinstance(depends_on, list):
+                    # Filter to only include valid agent IDs
+                    valid_dependencies = [dep for dep in depends_on if dep in agent_map]
+                    dependencies[agent.id] = valid_dependencies
+                elif isinstance(depends_on, str) and depends_on in agent_map:
+                    dependencies[agent.id] = [depends_on]
+        
+        # Assign priority to each agent based on various factors
+        prioritized_agents = []
+        for agent in agents:
+            # Check if the agent has an explicitly defined execution priority in its config
+            if agent.config and "execution_priority" in agent.config:
+                try:
+                    # Use the explicitly defined priority
+                    agent_priority = int(agent.config["execution_priority"])
+                    prioritized_agents.append((agent_priority, agent))
+                    continue
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid execution_priority in agent config for {agent.name}")
+            
+            # Check agent name and description for role indicators
+            agent_priority = default_priority
+            agent_text = f"{agent.name.lower()} {agent.description.lower()}"
+            
+            # Find the highest priority role that matches this agent
+            for role, priority in role_priorities.items():
+                if role in agent_text:
+                    agent_priority = min(agent_priority, priority)  # Use the highest priority (lowest number)
+            
+            # Check capabilities if available
+            if agent.capabilities:
+                for capability in agent.capabilities:
+                    # Look for capabilities that might indicate a role
+                    capability_name = capability.name.lower()
+                    if "research" in capability_name and role_priorities.get("research", 99) < agent_priority:
+                        agent_priority = role_priorities["research"]
+                    elif "strategy" in capability_name and role_priorities.get("strategist", 99) < agent_priority:
+                        agent_priority = role_priorities["strategist"]
+                    elif "content" in capability_name and role_priorities.get("content", 99) < agent_priority:
+                        agent_priority = role_priorities["content"]
+                    elif "evaluate" in capability_name and role_priorities.get("evaluator", 99) < agent_priority:
+                        agent_priority = role_priorities["evaluator"]
+                    # Check if the capability has execution_order info
+                    elif capability.parameters and "execution_priority" in capability.parameters:
+                        try:
+                            priority = int(capability.parameters["execution_priority"])
+                            agent_priority = min(agent_priority, priority)
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Store the agent with its priority
+            prioritized_agents.append((agent_priority, agent))
+        
+        # Sort agents by priority
+        prioritized_agents.sort(key=lambda x: x[0])
+        sorted_agents = [agent for _, agent in prioritized_agents]
+        
+        # Process dependencies to ensure proper execution order
+        if dependencies:
+            # Create a final execution order respecting dependencies
+            processed = set()
+            agent_execution_order = []
+            
+            def add_with_dependencies(agent_id):
+                """Add an agent and its dependencies to the execution order."""
+                if agent_id in processed:
+                    return
+                
+                # First add dependencies
+                if agent_id in dependencies:
+                    for dep_id in dependencies[agent_id]:
+                        add_with_dependencies(dep_id)
+                
+                # Then add the agent if it hasn't been processed
+                if agent_id not in processed and agent_id in agent_map:
+                    agent_execution_order.append(agent_map[agent_id])
+                    processed.add(agent_id)
+            
+            # Process each agent in priority order
+            for agent in sorted_agents:
+                add_with_dependencies(agent.id)
+            
+            # Add any remaining agents that weren't processed
+            for agent in sorted_agents:
+                if agent.id not in processed:
+                    agent_execution_order.append(agent)
+                    processed.add(agent.id)
+        else:
+            # If no dependencies, just use the priority-sorted list
+            agent_execution_order = sorted_agents
+        
+        # If no order was determined, use the original order
+        if not agent_execution_order:
+            agent_execution_order = agents
+        
+        logger.info(f"Determined execution order: {[agent.name for agent in agent_execution_order]}")
+        return agent_execution_order 

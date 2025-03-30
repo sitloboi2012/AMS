@@ -2,8 +2,8 @@ import logging
 import uuid
 from typing import Dict, List, Optional, Any
 
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 from ..core.registry import InMemoryAgentRegistry, AgentMetadata, AgentFramework, AgentStatus, AgentCapability
 from ..core.adapters import get_adapter
@@ -241,6 +241,12 @@ async def execute_task(session_id: str):
         task = session_info["task"]
         agent_ids = session_info["agents"]
         
+        # Get the session messages for context
+        messages = communication_hub.get_session_history(session_id)
+        
+        # Get the formatted conversation history
+        formatted_history = communication_hub.get_formatted_history(session_id, include_framework=True)
+        
         # Get the agents from the registry
         agents = []
         for agent_id in agent_ids:
@@ -249,9 +255,14 @@ async def execute_task(session_id: str):
                 raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
             agents.append(agent)
         
-        # Initialize and execute the agents
+        # Determine the optimal execution order using the supervisor
+        agent_execution_order = await supervisor.determine_agent_execution_order(agents)
+        
+        # Log the execution order
+        logger.info(f"Agent execution order: {[agent.name for agent in agent_execution_order]}")
+        
         results = []
-        for agent_metadata in agents:
+        for agent_metadata in agent_execution_order:
             try:
                 # Get the appropriate adapter for this agent's framework
                 adapter = get_adapter(agent_metadata.framework)
@@ -259,22 +270,40 @@ async def execute_task(session_id: str):
                 # Initialize the agent
                 initialized_agent = await adapter.initialize_agent(agent_metadata)
                 
-                # Execute the agent
-                execution_result = await adapter.execute_agent(initialized_agent, task)
+                # Execute the agent with message history for context
+                execution_result = await adapter.execute_agent(initialized_agent, task, messages)
                 
                 # Add result to the list
                 results.append(execution_result)
                 
-                # Add the response to the session as a message
+                # Extract the appropriate content based on response structure
+                message_content = ""
+                if "response" in execution_result:
+                    # AutoGen typically uses "response" field
+                    message_content = execution_result["response"]
+                elif "result" in execution_result:
+                    # CrewAI typically uses "result" field
+                    message_content = execution_result["result"]
+                else:
+                    # Fallback to string representation
+                    message_content = str(execution_result)
+                
+                # Send the message with framework information
                 communication_hub.send_message(
                     session_id=session_id,
-                    content=str(execution_result.get("response", "No response")) 
-                        if isinstance(execution_result.get("response"), str)
-                        else str(execution_result),
+                    content=message_content,
                     sender_id=agent_metadata.id,
                     sender_name=agent_metadata.name,
-                    metadata={"type": "agent_response", "status": execution_result.get("status", "unknown")}
+                    metadata={
+                        "type": "agent_response", 
+                        "status": execution_result.get("status", "unknown"),
+                        "framework": agent_metadata.framework.value
+                    }
                 )
+                
+                # Get fresh formatted history for the next agent
+                messages = communication_hub.get_session_history(session_id)
+                formatted_history = communication_hub.get_formatted_history(session_id, include_framework=True)
             except Exception as e:
                 logger.error(f"Error executing agent {agent_metadata.id}: {str(e)}")
                 # Add the error to the session as a message
@@ -283,7 +312,7 @@ async def execute_task(session_id: str):
                     content=f"Error executing agent: {str(e)}",
                     sender_id=agent_metadata.id,
                     sender_name=agent_metadata.name,
-                    metadata={"type": "error", "error": str(e)}
+                    metadata={"type": "error", "error": str(e), "framework": agent_metadata.framework.value}
                 )
         
         # Update session status

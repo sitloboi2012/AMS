@@ -123,7 +123,8 @@ flowchart TD
 
 #### Upcoming
 
-- [ ] Integrating with AG2 and LangGraph
+- [ ] AG2 and LangGraph Integrations
+- [ ] Low / No Code Platform like Flowise, N8N, LangFlow Integrations
 - [ ] Tools & MCP Integrations
 - [ ] Docker & Kubernetes Native Development & Deployment
 - [ ] LLM Model Deployment with vLLM and vLLM Production Stack

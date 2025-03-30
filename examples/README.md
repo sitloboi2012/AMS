@@ -56,6 +56,19 @@ Usage:
 python multi_agent_collaboration.py
 ```
 
+### 4. Mixed Framework Collaboration (`mixed_framework_collaboration.py`)
+
+This script demonstrates how agents from different frameworks (AutoGen and CrewAI) can work together through the AMS:
+- Registers agents from both AutoGen and CrewAI frameworks
+- Creates a complex task requiring diverse capabilities
+- Shows how agents from different frameworks collaborate
+- Displays the conversation with framework information for each agent
+
+Usage:
+```bash
+python mixed_framework_collaboration.py
+```
+
 ## Example Workflow
 
 A typical workflow for using the AMS might look like:
@@ -68,6 +81,7 @@ A typical workflow for using the AMS might look like:
 ## Adapting Examples
 
 Feel free to modify these examples to fit your specific use cases:
+
 - Change the agent capabilities and system prompts
 - Modify task descriptions to test different scenarios
 - Experiment with different LLM configurations
