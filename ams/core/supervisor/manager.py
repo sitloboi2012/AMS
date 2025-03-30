@@ -5,6 +5,7 @@ import openai
 
 from ..registry.base import AgentRegistry
 from ..registry.models import AgentMetadata
+from ..registry.capability_registry import capability_registry
 from ..communication.hub import CommunicationHub
 from .base import SupervisorAgent
 
@@ -24,11 +25,15 @@ class SupervisorManager(SupervisorAgent):
     ):
         self.agent_registry = agent_registry
         self.communication_hub = communication_hub
+        self.active_sessions: Dict[str, Dict[str, Any]] = {}
+        
         self.llm_config = llm_config or {
             "model": "gpt-4o",
             "temperature": 0.1
         }
-        self.active_sessions: Dict[str, Dict[str, Any]] = {}
+        
+        # Configure the capability registry with the same LLM config
+        capability_registry.llm_config = self.llm_config
     
     async def analyze_task(self, task: str) -> Dict[str, Any]:
         """
@@ -44,19 +49,17 @@ class SupervisorManager(SupervisorAgent):
         
         # Use OpenAI API to analyze the task
         try:
+            # First get a general task analysis with complexity and subtasks
             messages = [
-                {"role": "system", "content": """You are a task analyzer that identifies required capabilities for a given task.
-                Analyze the task and identify which capabilities would be needed to complete it.
-                Choose from the following capabilities:
-                - code_execution: For programming, coding, and software development tasks
-                - text_generation: For writing, creative, and text generation tasks
-                - calculation: For mathematical and computational tasks
-                - data_analysis: For data processing and analysis tasks
+                {"role": "system", "content": """You are a task analyzer that provides insights about a given task.
+                Analyze the task and provide a detailed assessment.
                 
                 Return your analysis as a JSON object with the following format:
                 {
-                    "required_capabilities": ["capability1", "capability2"],
-                    "reasoning": "Explanation of why these capabilities are required"
+                    "task_summary": "Brief summary of the task",
+                    "complexity": 5,  // On a scale of 1-10
+                    "subtasks": ["subtask1", "subtask2"],
+                    "fields": ["field1", "field2"]  // Knowledge domains relevant to the task
                 }
                 """
                 },
@@ -72,64 +75,68 @@ class SupervisorManager(SupervisorAgent):
             # Extract the JSON response
             content = response.choices[0].message.content
             try:
-                analysis = json.loads(content)
+                task_analysis = json.loads(content)
             except json.JSONDecodeError:
-                # Fallback if the response is not valid JSON
                 logger.warning(f"LLM response was not valid JSON: {content}")
-                # Extract capabilities using a simple text-based approach
-                required_capabilities = []
-                if "code" in content.lower() or "programming" in content.lower():
-                    required_capabilities.append("code_execution")
-                if "write" in content.lower() or "text" in content.lower():
-                    required_capabilities.append("text_generation")
-                if "math" in content.lower() or "calculate" in content.lower():
-                    required_capabilities.append("calculation")
-                if "data" in content.lower() or "analyze" in content.lower():
-                    required_capabilities.append("data_analysis")
-                
-                analysis = {
-                    "required_capabilities": required_capabilities,
-                    "reasoning": "Extracted from non-JSON LLM response"
+                # Create a basic analysis if JSON parsing fails
+                task_analysis = {
+                    "task_summary": task,
+                    "complexity": 5,
+                    "subtasks": [task],
+                    "fields": []
                 }
             
+            # Now use our capability registry to determine required capabilities
+            capability_scores = await capability_registry.analyze_capabilities_with_llm(
+                task, task_analysis
+            )
+            
+            # Add required capabilities to the analysis
+            required_capabilities = [
+                name for name, score in capability_scores.items() 
+                if score >= 0.5  # Use threshold of 0.5
+            ]
+            
             # If no capabilities were identified, default to text_generation
-            if not analysis.get("required_capabilities"):
-                analysis["required_capabilities"] = ["text_generation"]
-                analysis["reasoning"] = "Defaulting to text generation as no specific capabilities were identified."
+            if not required_capabilities:
+                required_capabilities = ["text_generation"]
+                logger.info("No specific capabilities identified. Defaulting to text_generation.")
             
-            # Add the task to the analysis
-            analysis["task"] = task
+            # Add the identified capabilities and scores to the analysis
+            task_analysis["required_capabilities"] = required_capabilities
+            task_analysis["capability_scores"] = capability_scores
+            task_analysis["task"] = task
             
-            logger.info(f"Task analysis complete: {analysis}")
-            return analysis
+            logger.info(f"Task analysis complete with capabilities: {required_capabilities}")
+            return task_analysis
             
         except Exception as e:
             logger.error(f"Error analyzing task with LLM: {str(e)}")
-            # Fallback to the simpler keyword-based approach
-            keywords = []
-            for keyword in ["code", "programming", "math", "writing", "research", "data"]:
-                if keyword.lower() in task.lower():
-                    keywords.append(keyword)
+            # Fallback to using the capability registry directly with minimal task analysis
+            simple_analysis = {"task": task, "complexity": 5}
             
-            required_capabilities = []
-            if any(k in ["code", "programming"] for k in keywords):
-                required_capabilities.append("code_execution")
-            if "math" in keywords:
-                required_capabilities.append("calculation")
-            if any(k in ["writing", "research"] for k in keywords):
-                required_capabilities.append("text_generation")
-            if "data" in keywords:
-                required_capabilities.append("data_analysis")
-                
-            # If we couldn't identify specific capabilities, default to text_generation
+            try:
+                capability_scores = await capability_registry.analyze_capabilities_with_llm(
+                    task, simple_analysis
+                )
+                required_capabilities = [
+                    name for name, score in capability_scores.items() 
+                    if score >= 0.5
+                ]
+            except Exception as inner_e:
+                logger.error(f"Error using capability registry: {str(inner_e)}")
+                required_capabilities = ["text_generation"]
+            
+            # Ensure we have at least one capability
             if not required_capabilities:
-                required_capabilities.append("text_generation")
+                required_capabilities = ["text_generation"]
             
             return {
                 "task": task,
-                "keywords": keywords,
+                "task_summary": task,
+                "complexity": 5,
                 "required_capabilities": required_capabilities,
-                "reasoning": "Fallback keyword-based analysis due to LLM error"
+                "reasoning": "Fallback analysis using capability registry due to LLM error"
             }
     
     async def select_agents(self, task_analysis: Dict[str, Any]) -> List[AgentMetadata]:
@@ -144,22 +151,22 @@ class SupervisorManager(SupervisorAgent):
         """
         logger.info(f"Selecting agents for task: {task_analysis['task']}")
         
-        required_capabilities = task_analysis.get("required_capabilities", [])
+        # Get the original task
+        task = task_analysis.get("task", "")
         
-        # Collect agents that have the required capabilities
-        selected_agents = []
-        for capability in required_capabilities:
-            agents = await self.agent_registry.find_agents_by_capability(capability)
-            selected_agents.extend(agents)
+        # Get all registered agents
+        all_agents = await self.agent_registry.list_agents()
         
-        # Remove duplicates by creating a dictionary keyed by agent ID
-        unique_agents = {agent.id: agent for agent in selected_agents}
+        # Use the capability registry to filter agents based on the task
+        selected_agents = await capability_registry.filter_agents_by_capabilities(
+            agents=all_agents,
+            task=task,
+            task_analysis=task_analysis,
+            threshold=0.5
+        )
         
-        # Get a list of unique agents
-        result = list(unique_agents.values())
-        
-        logger.info(f"Selected {len(result)} agents for the task")
-        return result
+        logger.info(f"Selected {len(selected_agents)} agents for the task")
+        return selected_agents
     
     async def create_collaboration(
         self, 

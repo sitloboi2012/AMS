@@ -9,8 +9,13 @@ Components:
 - app: FastAPI application with all defined routes and endpoints
 - models: Pydantic models for API request/response validation
 - routes: Individual API endpoint route definitions
+- middleware: API middleware components for request/response processing
 """
 
-from .app import app
+from fastapi import FastAPI
+from .app import create_app
+
+# Create the FastAPI application
+app = create_app()
 
 __all__ = ["app"] 

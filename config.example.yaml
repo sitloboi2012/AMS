@@ -1,0 +1,31 @@
+# AMS Example Configuration File
+# Copy to config.yaml and modify as needed
+
+# Server Configuration
+server:
+  host: "0.0.0.0"  # Host to bind the server to
+  port: 8000       # Port to bind the server to
+  reload: false    # Enable auto-reload for development
+  log_level: "info"  # Log level (debug, info, warning, error, critical)
+  workers: 4       # Number of worker processes
+
+# Database Configuration
+database:
+  url: "sqlite:///ams.db"  # Database connection URL
+  echo: false    # Echo SQL statements to console
+  pool_size: 5   # Database connection pool size
+
+# Security Configuration
+security:
+  # IMPORTANT: Change this to a strong secret key in production
+  secret_key: "your-very-secure-secret-key-here"
+  token_expiration: 1440  # Token expiration time in minutes (24 hours)
+  enable_auth: true     # Enable authentication
+
+# LLM Configuration
+llm:
+  provider: "openai"       # LLM provider (openai, azure, etc.)
+  api_key: ""              # API key for the LLM provider
+  default_model: "gpt-4"   # Default LLM model to use
+  temperature: 0.7         # Default temperature for LLM requests
+  max_tokens: 1024         # Default max tokens for LLM requests (0 for no limit) 

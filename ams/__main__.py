@@ -5,8 +5,13 @@ Main entry point for the Agent Management Server.
 import argparse
 import logging
 import uvicorn
+from pathlib import Path
+from typing import Optional
 
 from . import __version__
+from .core.config import load_config, Config
+
+logger = logging.getLogger("ams")
 
 def main() -> None:
     """Main entry point for the AMS server."""
@@ -14,26 +19,33 @@ def main() -> None:
     parser.add_argument(
         "--host", 
         type=str, 
-        default="0.0.0.0", 
-        help="Host to bind the server to (default: 0.0.0.0)"
+        help="Host to bind the server to (overrides config)"
     )
     parser.add_argument(
         "--port", 
         type=int, 
-        default=8000, 
-        help="Port to bind the server to (default: 8000)"
+        help="Port to bind the server to (overrides config)"
     )
     parser.add_argument(
         "--reload", 
         action="store_true", 
-        help="Enable auto-reload (development mode)"
+        help="Enable auto-reload (development mode, overrides config)"
     )
     parser.add_argument(
         "--log-level", 
         type=str, 
-        default="info", 
         choices=["debug", "info", "warning", "error", "critical"],
-        help="Log level (default: info)"
+        help="Log level (overrides config)"
+    )
+    parser.add_argument(
+        "--config", 
+        type=str,
+        help="Path to configuration file (YAML format)"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        help="Number of worker processes (overrides config)"
     )
     parser.add_argument(
         "--version", 
@@ -43,24 +55,41 @@ def main() -> None:
     
     args = parser.parse_args()
     
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    # Load configuration
+    config_path: Optional[Path] = None
+    if args.config:
+        config_path = Path(args.config)
+        if not config_path.exists():
+            logger.error(f"Config file not found: {args.config}")
+            return
+    
+    # Load the config (from file if specified, otherwise from env vars)
+    config = load_config(config_path)
+    
+    # Override config with command line arguments if provided
+    if args.host:
+        config.server.host = args.host
+    if args.port:
+        config.server.port = args.port
+    if args.reload:
+        config.server.reload = True
+    if args.log_level:
+        config.server.log_level = args.log_level
+    if args.workers:
+        config.server.workers = args.workers
     
     # Log startup info
-    logger = logging.getLogger("ams")
     logger.info(f"Starting Agent Management Server v{__version__}")
-    logger.info(f"Server will be available at http://{args.host}:{args.port}")
+    logger.info(f"Server will be available at http://{config.server.host}:{config.server.port}")
     
     # Start the server
     uvicorn.run(
         "ams.api:app",
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        log_level=args.log_level
+        host=config.server.host,
+        port=config.server.port,
+        reload=config.server.reload,
+        log_level=config.server.log_level.value,
+        workers=config.server.workers
     )
 
 if __name__ == "__main__":
