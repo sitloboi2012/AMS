@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/ams.png" alt="AMS Logo" width="300"/>
+  <img src="docs/ams.png" alt="AMS Logo" width="100"/>
   
   <h1>Agent Management Server (AMS)</h1>
   <p><em>Orchestrating AI Agents Across Frameworks</em></p>
